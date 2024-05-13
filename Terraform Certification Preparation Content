@@ -1,0 +1,188 @@
+Terraform Certification Commands
+terraform init
+ 
+terraform plan
+ 
+terraform apply --auto-approve
+ 
+terraform destroy
+ 
+variable "var_name" {
+  type = string
+ default = "ahmad"
+}
+Accessing variables ===> var.var_name
+ 
+terraform plan -var="varname=ahmad" / terraform apply -var variable_name="value"
+ 
+terraform.tfvars ===> to hold variable values
+ 
+Different var file ===> terraform plan -var-file=different.tfvars
+ 
+output "some-output" {
+value = "Hello World"
+}
+ 
+Environment Variables ===> export TF_VAR_<variable_name> e.g TF_VAR_var_name="ahmad"
+ 
+provider "github" {token = "abc"}
+ 
+Functions like join, upper, lower, file("${path.module}/id_rsa.pub") ===> file("./id_rsa.pub")
+ 
+terraform providers
+ 
+terraform destroy --target <resource_type>.<resource_name> (to delete a particular terraform resource and not all resources)
+e.g terraform destroy --target github_repository.terraform-example-repo-mac-os 
+ 
+terraform validate
+ 
+resource "<resource_provider>" "<resource_name>" {//resource configuration}
+e.g resource "github_repository" "repo-terraform-ahmad" {
+      name = "tf-ahmad-repo"
+       visibility = "public"
+}
+ 
+terraform refresh (Updates the terraform state file with the current deployed configuration of a resource) 
+(The main deployment terraform file e.g main.tf  obviously does not updated)
+ 
+terraform output <output_block_name in the main.tf file>   ("outputs" : {} - outputs block also added in the terraform state file)
+ 
+terraform console
+ 
+terraform fmt / terraform fmt --recursive
+ 
+Dynamic Blocks
+dynamic "ingress" {
+    for_each = [22,80,443,3306]
+    iterator = port
+    content {
+.        from_port = port.value
+.        to_port = port.value
+.        protocol = "tcp"
+.        cidr_blocks = ["0.0.0.0/0"]
+    }
+}
+ 
+terraform taint <resource>.<resource_name> (Marks the resource as tainted/faulty in the state file and recreates (destroys + create) a resource when apply command is used) - Not recommended by terraform instead use --replace when using apply command
+e.g terraform taint "aws_security_group"."my-first--ec2-tf-sg"
+ 
+Provisioners ===> 3 types (file, local-exec, remote-exec)  (used for running scripts/automation/configurations at either creation or deletion time)
+if provisioners ---> fail, resource gets created but gets tainted and apply command fails (default behaviour)
+if we don't want default behaviour ---> include ===> on_failure = continue
+
+example :   provisioner "file" {
+.  source = "sample_file.txt" / content = "This is directly from provisioner"
+.  destination = "/tmp/sample_file.txt"
+.  connection {
+.        type = "ssh"
+.        user = "ubuntu"
+.        private_key = file($"{path.module}/id_rsa")
+.        host = self.public_ip
+    }
+}
+Local Provisioners Examples 
+(command argument is mandatory)
+provisioner "local-exec"{
+.     command = "echo ${self.public_ip} > public_ip.txt"
+}
+provisioner "local-exec"{
+.  working_dir = "/tmp"
+.  command = "echo ${self.public_ip} > public_ip_in_temp.txt"
+}
+provisioner "local-exec" {
+.   interpreter = ["/usr/bin/python3","-c"]
+.   command = "print('HelloWorld!')"
+}
+provisioner "local-exec"{
+.    command = "env > env_vars.txt"
+.    environment = {
+.     abc = "abc_user"
+ }
+}
+provisioner "local-exec"{
+.  when = destroy
+.  command = "echo 'Instance destroyed'"
+}
+Remote Provisioners
+ provisioner "remote-exec" {
+.  inline = ["echo 'test' > /tmp/test.txt", "ifconfig > /tmp/infconfig.txt"]
+}
+provisioner "remote-exec"{
+. script = "./test_script.sh"
+}
+Why Provisioner not recommended by terraform?
+If I change the content of test_script.sh above and publish terraform apply then nothing would happen ---> since terraform is not tracking what provisioners do -----> recommendation ==> use configuration based tools like ansible, puppet etc
+ 
+Terraform configurations ===> to ensure that everyone on the team uses the same terraform and provider version.    ---> cannot use variables in this file 
+terraform {
+.   required_version = "1.1.0" / >= "1.1.0"/ > "1.1.0", < "1.2.0"
+.   required_providers {
+       aws  = {
+.         source = "hashicorp/aws"
+.         version = "3.71.0"
+    }    
+   }
+}
+ 
+terraform import resource.<resource_name> <resource_id> (to register an already created resource with terraform - add already created resource in the terraform state file)
+resource "aws_vpc" "main-vpc" {
+.    cidr_block = "10.0.0.0/24"
+.    tags = {
+.         Name = "VPC Created before terraform"
+      }
+}
+terraform import aws_vpc.main-vpc  vpc-09x340505cd345
+Now if change an configuration in "main_vpc" resource and publish apply command, the resource would be updated
+ 
+terraform graph | dot -Tpdf > graph.pdf ===> to see the terraform resources along with their dependencies in a graphical manner
+ 
+Terraform Workspaces
+terraform workspace list (to list all the workspaces in a terraform project ===> by default only a "default" workspace exists)
+terraform workspace show (shows the current workspace in which we are in)
+terraform workspace new <workspace_name> (to create a new workspace)
+e.g terraform workspace new prod
+terraform workspace select <workspace_name> (to move to a particular workspace like cd in shell)
+e.g terraform workspace select prod (goes to prod workspace from default)
+terraform workspace delete <workspace_name> (cannot delete default workspace + cannot delete a workspace you are already in - would need to switch to another workspace before deleting it)
+Use case : Different workspaces for different environments ===> not want to mix terraform state files ===> different state files for different workspaces
+e.g terraform apply --auto-approve --var file dev_terraform.tfvars (dev workspace)
+terraform apply --auto-approve --var file prod_terraform.tfvars      (prod workspace)
+Terraform Backends
+Using a S3 backend (Requires installation of aws cli with access and secret key having permission to read/write to S3)
+terraform {
+   backend "s3"{
+.      bucket = <bucket_name>
+.      region = <region_name>
+.      key = <terraform_state_file_name>
+   }
+}
+Example
+terraform {
+.     backend "s3"{
+.          bucket = "my-bucket"
+.          region = "us-east-1"
+.          key = "terraform.tfstate"
+      }
+}
+Migrate Backends
+terraform init -migrate-state (Remove the previous state configurations and add the present state before running the migration state command)
+ Locking Remote S3 Backend (to ensure that multiple people do not update the same configuration/state file concurrently)
+1. Create a dynamo db table table with primary key = LockID
+2. Use the following backend configuration
+terraform {
+.   backend "aws"{
+.     bucket = "<bucket_name>"
+.     region = "<bucket_region>"
+.     key = "<terraform_state_file_name>"
+.     dynamodb_table = "dynamo_db_table used for state locking"
+    }
+}
+Which environment variable can you set to show the most verbose debug logs possible when running Terraform commands?
+TF_LOG=TRACE
+You can set TF_LOG to the TRACE, DEBUG, INFO, WARN, or ERROR log level to change the verbosity of the log. TRACE is the default log level, and it is the most verbose.
+ terraform apply -replace="aws_instance.my-vm"
+(Terraform replaces the specified object (aws_instance.my-vm) even if there are no configuration changes that would require it) ==> preferred more than taint command which is deprecated
+When using remote state, root module outputs can be accessed by other configurations via a terraform_remote_state data source.
+
+terraform.tfstate ===> contains the state of the resources in the "resource" key which is a list of all the deployed resources
+terraform.tfstate.backup ===> contains the last deployment state (state before last deployment)
